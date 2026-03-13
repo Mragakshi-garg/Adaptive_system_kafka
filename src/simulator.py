@@ -10,7 +10,7 @@ class ICUSimulator:
         speed_factor: How many times faster than real-time.
                       e.g., 60.0 means 1 hour simulated in 1 minute real-time.
                       1.0 means real-time.
-        queue_client: A function or object with a push() method to send events to.
+        queue_client: A function or object with a push() or send() method to send events to.
         """
         self.data_path = data_path
         self.speed_factor = speed_factor
@@ -23,6 +23,7 @@ class ICUSimulator:
         print(f"Loading data from {self.data_path}...")
         self.events_df = pd.read_csv(self.data_path)
         self.events_df['charttime'] = pd.to_datetime(self.events_df['charttime'])
+        # Converts charttime column to datetime format.
         # Sort just in case it wasn't sorted perfectly
         self.events_df.sort_values(by='charttime', inplace=True)
         print(f"Loaded {len(self.events_df)} chronological events.")
@@ -38,7 +39,11 @@ class ICUSimulator:
         }
         
         if self.queue_client:
-            self.queue_client.push(payload)
+            if hasattr(self.queue_client, 'send'): # Kafka Producer
+                # Convert the payload to JSON string, then encode to bytes
+                self.queue_client.send('vitals-stream', json.dumps(payload).encode('utf-8'))
+            elif hasattr(self.queue_client, 'push'): # Simple multiprocess queue
+                self.queue_client.push(payload)
         else:
             # For phase 2 testing, just print the event
             print(f"EMIT [{payload['charttime']}] Patient {payload['subject_id']} -> Item {payload['itemid']}: {payload['valuenum']}")

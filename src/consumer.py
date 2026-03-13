@@ -5,11 +5,13 @@ from datetime import datetime
 from model import RiskPredictor
 
 class ICUConsumer:
-    def __init__(self, queue_server):
+    def __init__(self, queue_server=None, kafka_consumer=None):
         """
         queue_server: An object providing a .get() method (blocking or non-blocking).
+        kafka_consumer: A kafka.KafkaConsumer instance.
         """
         self.queue_server = queue_server
+        self.kafka_consumer = kafka_consumer
         
         # State management: dict mapping stay_id -> patient properties
         # properties: { 'last_update': timestamp, 'vital_name': [list of recent values/times], ... }
@@ -109,14 +111,41 @@ class ICUConsumer:
     def run(self):
         print("Consumer started. Waiting for events...")
         events_processed = 0
-        while True:
-            # Wait for event
-            event = self.queue_server.get()
-            
-            # Poison pill to stop
-            if event is None:
-                print(f"Consumer shutting down. Processed {events_processed} events.")
-                break
+        start_time = time.time()
+        
+        if self.kafka_consumer:
+            for message in self.kafka_consumer:
+                event = json.loads(message.value.decode('utf-8'))
                 
-            self.process_event(event)
-            events_processed += 1
+                # We can implement a poison pill for Kafka too, but usually it runs forever
+                if event.get('type') == 'POISON_PILL':
+                    elapsed = time.time() - start_time
+                    print(f"Consumer shutting down. Processed {events_processed} events in {elapsed:.2f}s.")
+                    break
+                    
+                self.process_event(event)
+                events_processed += 1
+                
+                if events_processed % 1000 == 0:
+                    elapsed = time.time() - start_time
+                    rate = events_processed / elapsed if elapsed > 0 else 0
+                    print(f"--- Processed {events_processed} events in {elapsed:.2f}s ({rate:.1f} events/sec) ---")
+        else:
+            while True:
+                # Wait for event
+                event = self.queue_server.get()
+            
+                # Poison pill to stop
+                if event is None:
+                    elapsed = time.time() - start_time
+                    print(f"Consumer shutting down. Processed {events_processed} events in {elapsed:.2f}s.")
+                    break
+                    
+                self.process_event(event)
+                events_processed += 1
+                
+                # Print periodic updates on processing speed
+                if events_processed % 1000 == 0:
+                    elapsed = time.time() - start_time
+                    rate = events_processed / elapsed if elapsed > 0 else 0
+                    print(f"--- Processed {events_processed} events in {elapsed:.2f}s ({rate:.1f} events/sec) ---")
