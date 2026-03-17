@@ -24,6 +24,16 @@ class ICUSimulator:
         self.events_df = pd.read_csv(self.data_path)
         self.events_df['charttime'] = pd.to_datetime(self.events_df['charttime'])
         # Converts charttime column to datetime format.
+        
+        # --- ALIGN TIMELINES ---
+        # MIMIC-IV dates are shifted randomly per patient. If we don't align them,
+        # patient A might be in 2110 and patient B in 2115, causing the simulator
+        # to wait simulation "years" before patient B appears.
+        print("Aligning patient timelines to start simultaneously...")
+        min_times = self.events_df.groupby('stay_id')['charttime'].transform('min')
+        global_min_time = self.events_df['charttime'].min()
+        self.events_df['charttime'] = global_min_time + (self.events_df['charttime'] - min_times)
+        
         # Sort just in case it wasn't sorted perfectly
         self.events_df.sort_values(by='charttime', inplace=True)
         print(f"Loaded {len(self.events_df)} chronological events.")

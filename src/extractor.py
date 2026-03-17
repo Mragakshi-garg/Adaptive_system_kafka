@@ -5,7 +5,7 @@ import time
 def extract_simulator_subset(
     chartevents_path='data/chartevents (1).csv.gz',
     output_path='data/subset_events.csv',
-    num_patients=50
+    num_patients=10
 ):
     print(f"Finding first {num_patients} patients with target signs in {chartevents_path}...")
     

@@ -22,7 +22,7 @@ while True:
         else:
             with placeholder.container():
                 # Present summary metrics
-                active = len(data)
+                active = len(set(s.get('subject_id') for s in data.values() if s.get('subject_id') is not None))
                 critical = sum(1 for s in data.values() if s.get('current_risk', 0) > 0.6)
                 
                 col1, col2, col3 = st.columns(3)
@@ -40,11 +40,13 @@ while True:
                     
                     # Highlight critical risk
                     alert_status = "🚨 CRITICAL" if r >= 0.6 else ("⚠️ WARNING" if r >= 0.3 else "✅ OK")
+                    status_priority = 2 if r >= 0.6 else (1 if r >= 0.3 else 0)
                     
                     df_data.append({
+                        'Priority': status_priority,
                         '🚨 Status': alert_status,
                         'Risk Score': r,
-                        'Patient ID': s['subject_id'],
+                        'ICU Stay ID': s['stay_id'],
                         'Last Update': s['last_update'],
                         'HR': v.get('hr'),
                         'SpO2': v.get('spo2'),
@@ -55,12 +57,20 @@ while True:
                 df = pd.DataFrame(df_data)
                 
                 if not df.empty:
-                    # Sort by highest risk first
-                    df.sort_values(by='Risk Score', ascending=False, inplace=True)
+                    # Convert Last Update to datetime to ensure proper chronological sorting
+                    df['Last Update'] = pd.to_datetime(df['Last Update'])
+                    df['Risk Score'] = df['Risk Score'].astype(float)
+                    
+                    # Sort by highest risk category first, then by most recent update, then exact risk score
+                    df.sort_values(by=['Priority', 'Last Update', 'Risk Score'], ascending=[False, False, False], inplace=True)
+                    df.drop(columns=['Priority'], inplace=True)
                     
                     # Format float columns
                     df['Risk Score'] = df['Risk Score'].apply(lambda x: f"{x:.2f}")
-                    st.dataframe(df, use_container_width=True, hide_index=True)
+                    # Convert Last Update back to string for clean display
+                    df['Last Update'] = df['Last Update'].dt.strftime('%Y-%m-%d %H:%M:%S')
+                    
+                    st.dataframe(df, width='stretch', hide_index=True)
     
     except (FileNotFoundError, json.JSONDecodeError):
         with placeholder.container():
