@@ -5,7 +5,7 @@ import time
 def extract_simulator_subset(
     chartevents_path='data/chartevents (1).csv.gz',
     output_path='data/subset_events.csv',
-    num_patients=10
+    num_patients=50
 ):
     print(f"Finding first {num_patients} patients with target signs in {chartevents_path}...")
     
@@ -20,7 +20,7 @@ def extract_simulator_subset(
     # 220180: Non-invasive Blood Pressure diastolic
     # 220181: Non-invasive Blood Pressure mean
     target_item_ids = [220045, 220277, 220179, 220180, 220181]
-    cols_to_use = ['subject_id', 'hadm_id', 'stay_id', 'charttime', 'itemid', 'valuenum']
+    cols_to_use = ['subject_id', 'hadm_id', 'stay_id', 'charttime', 'itemid', 'valuenum', 'warning']
     
     chunksize = 1000000 
     target_subjects = set()

@@ -16,6 +16,7 @@ class ICUSimulator:
         self.speed_factor = speed_factor
         self.queue_client = queue_client
         self.events_df = None
+        # used for time syncronization
         self.start_physical_time = None
         self.start_sim_time = None
 
@@ -45,7 +46,8 @@ class ICUSimulator:
             'stay_id': int(event['stay_id']) if pd.notnull(event['stay_id']) else None,
             'charttime': event['charttime'].isoformat(),
             'itemid': int(event['itemid']),
-            'valuenum': float(event['valuenum'])
+            'valuenum': float(event['valuenum']),
+            'send_time': time.time()
         }
         
         if self.queue_client:

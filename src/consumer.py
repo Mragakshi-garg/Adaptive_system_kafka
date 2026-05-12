@@ -72,10 +72,14 @@ class ICUConsumer:
             vital_name = self.item_map[item_id]
             state['vitals'][vital_name] = val
             
+        # Calculate latency if send_time is available
+        send_time = event.get('send_time')
+        latency = (time.time() - send_time) if send_time else 0.0
+        print
         # Emit updated state for prediction / dashboard
-        self._on_state_updated(state)
+        self._on_state_updated(state, latency)
         
-    def _on_state_updated(self, state):
+    def _on_state_updated(self, state, latency=0.0):
         """Hook for sending state to next layer (dashboard/ml model)."""
         # Run prediction on latest state
         current_risk = self.predictor.predict_risk(state)
@@ -89,7 +93,7 @@ class ICUConsumer:
         print(f"[{dt_str}] Patient {state['subject_id']} | "
               f"HR:{v['hr']} SpO2:{v['spo2']} "
               f"BP:{v['sysbp']}/{v['diabp']} | "
-              f"RISK: {current_risk:.2f}")
+              f"RISK: {current_risk:.2f} | Latency: {latency:.4f}s")
               
         # Dump state to JSON for Dashboard to read (poor man's Redis)
         self._write_state_to_file()
