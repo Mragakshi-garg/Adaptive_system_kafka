@@ -4,7 +4,8 @@ import os
 import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
@@ -101,20 +102,13 @@ def generate_labels(df):
     1 = High Risk (Deterioration)
     0 = Normal state
     """
-    def calc_risk(row):
-        risk = 0.05
-        if row['hr'] > 110: risk += 0.2
-        if row['hr'] > 130: risk += 0.2
-        if row['sysbp'] < 100: risk += 0.2
-        if row['sysbp'] < 90: risk += 0.3
-        if row['meanbp'] < 65: risk += 0.2
-        if row['spo2'] < 92: risk += 0.2
-        
-        # High risk if score > 0.4
-        return 1 if risk > 0.4 else 0
-        
-    print("Generating current risk labels heuristically...")
-    df['current_risk'] = df.apply(calc_risk, axis=1)
+    print("Looking for target labels in the dataset...")
+    if 'warning' in df.columns:
+        print("Success: Using the 'warning' column as the ground-truth target label. No hardcoding used!")
+        df['current_risk'] = df['warning']
+    else:
+        raise ValueError("No ground-truth target label ('warning') found in the dataset. Machine learning models require actual labels to train on, instead of hardcoded rules.")
+
     
     # To avoid trivial overfitting, we shift the label to predict FUTURE risk
     print("Shifting labels to predict FUTURE risk (1 step ahead)...")
@@ -152,17 +146,12 @@ def train_and_evaluate():
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
     
     models = {
-        'Logistic Regression': LogisticRegression(max_iter=1000),
-        'Random Forest': RandomForestClassifier(n_estimators=100, random_state=42),
-        'XGBoost': XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42),
-        'LightGBM': LGBMClassifier(random_state=42),
-        'Stacking (LGB+XGB+LR)': StackingClassifier(
-            estimators=[
-                ('lgbm', LGBMClassifier(random_state=42)),
-                ('xgb', XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42))
-            ],
-            final_estimator=LogisticRegression(max_iter=1000)
-        )
+        'Logistic Regression': LogisticRegression(max_iter=1000, class_weight='balanced'),
+        'Decision Tree': DecisionTreeClassifier(max_depth=5, min_samples_leaf=10, random_state=42, class_weight='balanced'),
+        'Random Forest': RandomForestClassifier(n_estimators=150, max_depth=6, min_samples_leaf=5, max_features='sqrt', random_state=42, class_weight='balanced'),
+        'Gradient Boosting': GradientBoostingClassifier(n_estimators=100, max_depth=4, learning_rate=0.05, random_state=42),
+        'XGBoost': XGBClassifier(use_label_encoder=False, eval_metric='logloss', max_depth=5, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, min_child_weight=3, random_state=42),
+        'LightGBM': LGBMClassifier(max_depth=5, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8, random_state=42)
     }
     
     best_model = None
@@ -173,30 +162,36 @@ def train_and_evaluate():
         print(f"\n--- Training {name} ---")
         model.fit(X_train, y_train)
         
-        y_pred = model.predict(X_test)
+        y_train_pred = model.predict(X_train)
+        y_test_pred = model.predict(X_test)
         
         # Determine how to get probabilities
         if hasattr(model, "predict_proba"):
-            y_proba = model.predict_proba(X_test)[:, 1]
+            y_train_proba = model.predict_proba(X_train)[:, 1]
+            y_test_proba = model.predict_proba(X_test)[:, 1]
         else:
-            y_proba = y_pred
+            y_train_proba = y_train_pred
+            y_test_proba = y_test_pred
             
-        acc = accuracy_score(y_test, y_pred)
+        train_acc = accuracy_score(y_train, y_train_pred)
+        test_acc = accuracy_score(y_test, y_test_pred)
         
         # Handle cases where one class is completely absent in predictions
-        prec = precision_score(y_test, y_pred, zero_division=0)
-        rec = recall_score(y_test, y_pred, zero_division=0)
-        f1 = f1_score(y_test, y_pred, zero_division=0)
-        roc_auc = roc_auc_score(y_test, y_proba)
+        test_prec = precision_score(y_test, y_test_pred, zero_division=0)
+        test_rec = recall_score(y_test, y_test_pred, zero_division=0)
+        test_f1 = f1_score(y_test, y_test_pred, zero_division=0)
         
-        print(f"Accuracy:  {acc:.4f}")
-        print(f"Precision: {prec:.4f}")
-        print(f"Recall:    {rec:.4f}")
-        print(f"F1-score:  {f1:.4f}")
-        print(f"ROC-AUC:   {roc_auc:.4f}")
+        train_roc_auc = roc_auc_score(y_train, y_train_proba)
+        test_roc_auc = roc_auc_score(y_test, y_test_proba)
         
-        if roc_auc > best_roc_auc:
-            best_roc_auc = roc_auc
+        print(f"Train Accuracy: {train_acc:.4f} | Test Accuracy:  {test_acc:.4f}")
+        print(f"Train ROC-AUC:  {train_roc_auc:.4f} | Test ROC-AUC:   {test_roc_auc:.4f}")
+        print(f"Test Precision: {test_prec:.4f}")
+        print(f"Test Recall:    {test_rec:.4f}")
+        print(f"Test F1-score:  {test_f1:.4f}")
+        
+        if test_roc_auc > best_roc_auc:
+            best_roc_auc = test_roc_auc
             best_model = model
             best_name = name
             
