@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import os
+import time
 import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
@@ -131,7 +132,7 @@ def generate_labels(df):
     return df
 
 def train_and_evaluate():
-    df = preprocess_data('data/kafka_streaming_data.csv')
+    df = preprocess_data('data/streaming_data.csv')
     df = generate_labels(df)
     
     # Features matching `model.py` extraction: hr, spo2, sysbp, meanbp
@@ -160,10 +161,19 @@ def train_and_evaluate():
     
     for name, model in models.items():
         print(f"\n--- Training {name} ---")
+        
+        train_start_time = time.time()
         model.fit(X_train, y_train)
+        train_end_time = time.time()
+        train_latency = train_end_time - train_start_time
         
         y_train_pred = model.predict(X_train)
+        
+        inference_start_time = time.time()
         y_test_pred = model.predict(X_test)
+        inference_end_time = time.time()
+        inference_latency = inference_end_time - inference_start_time
+        avg_inference_latency = inference_latency / len(X_test)
         
         # Determine how to get probabilities
         if hasattr(model, "predict_proba"):
@@ -189,6 +199,10 @@ def train_and_evaluate():
         print(f"Test Precision: {test_prec:.4f}")
         print(f"Test Recall:    {test_rec:.4f}")
         print(f"Test F1-score:  {test_f1:.4f}")
+        total_latency = train_latency + inference_latency
+        print(f"Total Latency:  {total_latency:.4f} seconds")
+        print(f"Inference Latency: {inference_latency:.4f} seconds")
+        print(f"Average Inference Latency: {avg_inference_latency:.6f} seconds/sample")
         
         if test_roc_auc > best_roc_auc:
             best_roc_auc = test_roc_auc

@@ -1,80 +1,73 @@
-import streamlit as st
-import pandas as pd
+import os
 import json
-import time
+import asyncio
+import redis.asyncio as aioredis
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 
-st.set_page_config(layout="wide", page_title="ICU Simulator Dashboard")
+app = FastAPI()
 
-st.title("🏥 Real-Time ICU Data Simulator")
-st.markdown("Live monitoring of patients and predictive alerts for early deterioration.")
+# Allow your Lovable frontend to connect from any origin
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Create an empty container to hold the live-updating table
-placeholder = st.empty()
+# Track dismissed alarms in memory
+dismissed_alarms = set()
 
-while True:
+REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
+REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
+REDIS_CHANNEL = 'icu_vitals'
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+@app.post("/dismiss/{subject_id}")
+async def dismiss_alarm(subject_id: str):
+    dismissed_alarms.add(subject_id)
+    return {"status": "dismissed", "subject_id": subject_id}
+
+
+@app.delete("/dismiss/{subject_id}")
+async def undismiss_alarm(subject_id: str):
+    dismissed_alarms.discard(subject_id)
+    return {"status": "active", "subject_id": subject_id}
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
+    print("Frontend connected via WebSocket")
+
+    r = aioredis.Redis(host=REDIS_HOST, port=REDIS_PORT,
+                       decode_responses=True)
+    pubsub = r.pubsub()
+    await pubsub.subscribe(REDIS_CHANNEL)
+
     try:
-        with open('data/current_state.json', 'r') as f:
-            data = json.load(f)
-            
-        if not data:
-            with placeholder.container():
-                st.info("Waiting for data stream... Run `python src/main.py` first.")
-        else:
-            with placeholder.container():
-                # Present summary metrics
-                active = len(set(s.get('subject_id') for s in data.values() if s.get('subject_id') is not None))
-                critical = sum(1 for s in data.values() if s.get('current_risk', 0) > 0.6)
-                
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Active Patients", active)
-                col2.metric("Critical Alerts", critical)
-                col3.metric("Highest Risk", f"{max((s.get('current_risk', 0) for s in data.values()), default=0.0):.2f}")
-                
-                st.markdown("---")
-                
-                # Display metrics as a dataframe
-                df_data = []
-                for stay_id, s in data.items():
-                    r = s.get('current_risk', 0.0)
-                    v = s.get('vitals', {})
-                    
-                    # Highlight critical risk
-                    alert_status = "🚨 CRITICAL" if r >= 0.6 else ("⚠️ WARNING" if r >= 0.3 else "✅ OK")
-                    status_priority = 2 if r >= 0.6 else (1 if r >= 0.3 else 0)
-                    
-                    df_data.append({
-                        'Priority': status_priority,
-                        '🚨 Status': alert_status,
-                        'Risk Score': r,
-                        'ICU Stay ID': s['stay_id'],
-                        'Last Update': s['last_update'],
-                        'HR': v.get('hr'),
-                        'SpO2': v.get('spo2'),
-                        'BP (Sys/Dia)': f"{v.get('sysbp')}/{v.get('diabp')}",
-                        'MAP': v.get('meanbp')
-                    })
-                
-                df = pd.DataFrame(df_data)
-                
-                if not df.empty:
-                    # Convert Last Update to datetime to ensure proper chronological sorting
-                    df['Last Update'] = pd.to_datetime(df['Last Update'])
-                    df['Risk Score'] = df['Risk Score'].astype(float)
-                    
-                    # Sort by highest risk category first, then by most recent update, then exact risk score
-                    df.sort_values(by=['Priority', 'Last Update', 'Risk Score'], ascending=[False, False, False], inplace=True)
-                    df.drop(columns=['Priority'], inplace=True)
-                    
-                    # Format float columns
-                    df['Risk Score'] = df['Risk Score'].apply(lambda x: f"{x:.2f}")
-                    # Convert Last Update back to string for clean display
-                    df['Last Update'] = df['Last Update'].dt.strftime('%Y-%m-%d %H:%M:%S')
-                    
-                    st.dataframe(df, width='stretch', hide_index=True)
-    
-    except (FileNotFoundError, json.JSONDecodeError):
-        with placeholder.container():
-            st.info("System offline. Start the simulator: `python src/main.py`")
-            
-    # Use a tiny sleep to yield execution but update nearly instantly
-    time.sleep(0.05)
+        async for message in pubsub.listen():
+            if message['type'] == 'message':
+                data = json.loads(message['data'])
+
+                # If this patient's alarm was dismissed, mark it
+                if data['subject_id'] in dismissed_alarms:
+                    data['warning'] = 0
+                    data['dismissed'] = True
+                else:
+                    data['dismissed'] = False
+
+                await ws.send_json(data)
+
+    except WebSocketDisconnect:
+        print("Frontend disconnected")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+    finally:
+        await pubsub.unsubscribe(REDIS_CHANNEL)
+        await r.aclose()
